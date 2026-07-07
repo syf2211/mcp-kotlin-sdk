@@ -7,6 +7,11 @@ import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.modelcontextprotocol.kotlin.sdk.types.CustomRequest
 import io.modelcontextprotocol.kotlin.sdk.types.EmptyResult
+import io.modelcontextprotocol.kotlin.sdk.types.InitializeRequest
+import io.modelcontextprotocol.kotlin.sdk.types.InitializeResult
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
+import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCError
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessage
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCNotification
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCRequest
@@ -15,6 +20,8 @@ import io.modelcontextprotocol.kotlin.sdk.types.McpJson
 import io.modelcontextprotocol.kotlin.sdk.types.Method
 import io.modelcontextprotocol.kotlin.sdk.types.ReadResourceRequest
 import io.modelcontextprotocol.kotlin.sdk.types.ReadResourceRequestParams
+import io.modelcontextprotocol.kotlin.sdk.types.RPCError
+import io.modelcontextprotocol.kotlin.sdk.types.RequestId
 import io.modelcontextprotocol.kotlin.sdk.types.RequestMeta
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
@@ -161,6 +168,36 @@ class ProtocolTest {
     }
 
     @Test
+    fun `should return InvalidParams when typed request params fail deserialization`() = runTest {
+        protocol.connect(transport)
+        protocol.setRequestHandler<InitializeRequest>(Method.Defined.Initialize) { _, _ ->
+            InitializeResult(
+                protocolVersion = "2025-03-26",
+                capabilities = ServerCapabilities(),
+                serverInfo = Implementation(name = "test", version = "1.0"),
+            )
+        }
+
+        transport.deliver(
+            JSONRPCRequest(
+                id = 1,
+                method = Method.Defined.Initialize.value,
+                params = buildJsonObject {
+                    put("capabilities", buildJsonObject {})
+                    put("clientInfo", buildJsonObject {
+                        put("name", JsonPrimitive("repro"))
+                        put("version", JsonPrimitive("0.1.0"))
+                    })
+                },
+            ),
+        )
+
+        val error = transport.awaitError()
+        error.id shouldBe RequestId.NumberId(1)
+        error.error.code shouldBe RPCError.ErrorCode.INVALID_PARAMS
+    }
+
+    @Test
     fun `should create params object when request params are null`() = runTest {
         protocol.connect(transport)
         val request = CustomRequest(
@@ -238,6 +275,12 @@ private class RecordingTransport : Transport {
         val message = sentMessages.receive()
         return message as? JSONRPCRequest
             ?: error("Expected JSONRPCRequest but received ${message::class.simpleName}")
+    }
+
+    suspend fun awaitError(): JSONRPCError {
+        val message = sentMessages.receive()
+        return message as? JSONRPCError
+            ?: error("Expected JSONRPCError but received ${message::class.simpleName}")
     }
 
     suspend fun deliver(message: JSONRPCMessage) {

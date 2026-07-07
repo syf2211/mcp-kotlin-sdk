@@ -28,6 +28,7 @@ import kotlinx.atomicfu.atomic
 import kotlinx.atomicfu.getAndUpdate
 import kotlinx.atomicfu.update
 import kotlinx.collections.immutable.PersistentMap
+import kotlinx.serialization.SerializationException
 import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
@@ -326,12 +327,7 @@ public abstract class Protocol(@PublishedApi internal val options: ProtocolOptio
             logger.error(cause) { "Error handling request: ${request.method} (id: ${request.id})" }
 
             try {
-                val rpcError = if (cause is McpException) {
-                    RPCError(code = cause.code, message = cause.message.orEmpty(), data = cause.data)
-                } else {
-                    RPCError(code = RPCError.ErrorCode.INTERNAL_ERROR, message = cause.message ?: "Internal error")
-                }
-                transport?.send(JSONRPCError(id = request.id, error = rpcError))
+                transport?.send(JSONRPCError(id = request.id, error = rpcErrorForHandlerFailure(cause)))
             } catch (e: CancellationException) {
                 throw e
             } catch (sendError: Throwable) {
@@ -604,5 +600,14 @@ public abstract class Protocol(@PublishedApi internal val options: ProtocolOptio
      */
     public fun removeNotificationHandler(method: Method) {
         _notificationHandlers.update { current -> current.remove(method.value) }
+    }
+
+    private fun rpcErrorForHandlerFailure(cause: Throwable): RPCError = when (cause) {
+        is McpException -> RPCError(code = cause.code, message = cause.message.orEmpty(), data = cause.data)
+        is SerializationException -> RPCError(
+            code = RPCError.ErrorCode.INVALID_PARAMS,
+            message = cause.message ?: "Invalid params",
+        )
+        else -> RPCError(code = RPCError.ErrorCode.INTERNAL_ERROR, message = cause.message ?: "Internal error")
     }
 }
