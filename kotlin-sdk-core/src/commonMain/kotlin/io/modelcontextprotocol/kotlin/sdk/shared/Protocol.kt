@@ -33,6 +33,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.encodeToJsonElement
@@ -326,10 +327,22 @@ public abstract class Protocol(@PublishedApi internal val options: ProtocolOptio
             logger.error(cause) { "Error handling request: ${request.method} (id: ${request.id})" }
 
             try {
-                val rpcError = if (cause is McpException) {
-                    RPCError(code = cause.code, message = cause.message.orEmpty(), data = cause.data)
-                } else {
-                    RPCError(code = RPCError.ErrorCode.INTERNAL_ERROR, message = cause.message ?: "Internal error")
+                val rpcError = when (cause) {
+                    is McpException -> RPCError(
+                        code = cause.code,
+                        message = cause.message.orEmpty(),
+                        data = cause.data,
+                    )
+
+                    is SerializationException -> RPCError(
+                        code = RPCError.ErrorCode.INVALID_PARAMS,
+                        message = "Invalid params",
+                    )
+
+                    else -> RPCError(
+                        code = RPCError.ErrorCode.INTERNAL_ERROR,
+                        message = cause.message ?: "Internal error",
+                    )
                 }
                 transport?.send(JSONRPCError(id = request.id, error = rpcError))
             } catch (e: CancellationException) {

@@ -7,9 +7,12 @@ import io.modelcontextprotocol.kotlin.sdk.types.InitializeRequest
 import io.modelcontextprotocol.kotlin.sdk.types.InitializeRequestParams
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCError
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessage
+import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCRequest
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCResponse
 import io.modelcontextprotocol.kotlin.sdk.types.LATEST_PROTOCOL_VERSION
+import io.modelcontextprotocol.kotlin.sdk.types.Method
 import io.modelcontextprotocol.kotlin.sdk.types.RPCError
+import io.modelcontextprotocol.kotlin.sdk.types.RequestId
 import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.toJSON
 import kotlinx.coroutines.CompletableDeferred
@@ -18,6 +21,8 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
@@ -148,5 +153,39 @@ class ServerSessionInitializeTest {
         errors.forEach { error ->
             assertEquals(RPCError.ErrorCode.INVALID_REQUEST, error.error.code)
         }
+    }
+
+    @Test
+    fun `should return invalid params for malformed initialize request`() = runTest {
+        val session = createSession()
+        val (clientTransport, serverTransport) = InMemoryTransport.createLinkedPair()
+
+        val errorDone = CompletableDeferred<JSONRPCError>()
+        clientTransport.onMessage { message ->
+            if (message is JSONRPCError) {
+                errorDone.complete(message)
+            }
+        }
+
+        session.connect(serverTransport)
+
+        clientTransport.send(
+            JSONRPCRequest(
+                id = 1,
+                method = Method.Defined.Initialize.value,
+                params = buildJsonObject {
+                    put("capabilities", buildJsonObject {})
+                    put("clientInfo", buildJsonObject {
+                        put("name", "repro")
+                        put("version", "0.1.0")
+                    })
+                },
+            ),
+        )
+
+        val error = errorDone.await()
+        assertEquals(RPCError.ErrorCode.INVALID_PARAMS, error.error.code)
+        assertEquals("Invalid params", error.error.message)
+        assertEquals(RequestId.NumberId(1), error.id)
     }
 }
